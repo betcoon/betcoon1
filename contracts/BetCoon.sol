@@ -5,67 +5,79 @@ contract BetCoon {
     struct Bet {
         uint256 id;
         uint256 targetPrice;
-        uint256 dueDate;
-        address creator;
+        uint256 startTime;
+        uint256 endTime;
+        uint256 totalStake;
+        uint256 winningStake;
         bool isOpen;
+        bool outcome; // true if Bitcoin price is above target price
         bool isResolved;
         mapping(address => uint256) stakes;
-        uint256 totalStake;
-        bool outcome; // true if target price is met or exceeded
+        mapping(address => bool) betSide; // true if bet on price being above target price
     }
 
     uint256 public nextBetId;
     mapping(uint256 => Bet) public bets;
 
-    function createBet(uint256 targetPrice, uint256 dueDate) public {
-        require(dueDate > block.timestamp, "Due date must be in the future");
+    // Function to create a new bet
+    function createBet(uint256 targetPrice, uint256 durationInSeconds) public {
+        uint256 endTime = block.timestamp + durationInSeconds;
+        require(endTime > block.timestamp, "End time must be in the future");
+
         Bet storage bet = bets[nextBetId];
         bet.id = nextBetId;
         bet.targetPrice = targetPrice;
-        bet.dueDate = dueDate;
-        bet.creator = msg.sender;
+        bet.startTime = block.timestamp;
+        bet.endTime = endTime;
         bet.isOpen = true;
         bet.isResolved = false;
+        bet.totalStake = 0;
+        bet.winningStake = 0;
         nextBetId++;
     }
 
-    function joinBet(uint256 betId) public payable {
+    // Function to join an existing bet
+    function joinBet(uint256 betId, bool aboveTarget) public payable {
         Bet storage bet = bets[betId];
-        require(bet.isOpen, "Bet is not open");
-        require(bet.dueDate > block.timestamp, "Bet has already ended");
+        require(block.timestamp <= getBetCutoffTime(bet.startTime, bet.endTime), "Bet cutoff time has passed");
         require(msg.value > 0, "Must stake some amount");
+        require(bet.isOpen, "Bet is not open");
 
         bet.stakes[msg.sender] += msg.value;
         bet.totalStake += msg.value;
+        bet.betSide[msg.sender] = aboveTarget;
     }
 
+    // Function to resolve the bet and determine the winning side
     function resolveBet(uint256 betId, uint256 actualPrice) public {
         Bet storage bet = bets[betId];
-        require(msg.sender == bet.creator, "Only creator can resolve the bet");
-        require(bet.dueDate <= block.timestamp, "Bet has not ended yet");
-        require(!bet.isResolved, "Bet is already resolved");
+        require(block.timestamp >= bet.endTime, "Bet is still ongoing");
+        require(!bet.isResolved, "Bet already resolved");
 
         bet.isResolved = true;
         bet.outcome = actualPrice >= bet.targetPrice;
+
+        // Logic to calculate total winning stake
+        // Iterate over stakes and sum the total staked amount for the winning side
     }
 
+    // Function to claim winnings from a resolved bet
     function claimWinnings(uint256 betId) public {
         Bet storage bet = bets[betId];
         require(bet.isResolved, "Bet is not resolved yet");
+        require(bet.stakes[msg.sender] > 0, "No stake to claim");
+        require(bet.betSide[msg.sender] == bet.outcome, "Not on the winning side");
 
-        uint256 userStake = bet.stakes[msg.sender];
-        require(userStake > 0, "No stake to claim");
+        uint256 winnerShare = (bet.stakes[msg.sender] * bet.totalStake) / bet.winningStake;
+        payable(msg.sender).transfer(winnerShare);
 
-        // Payout logic: winners get their stake back plus a proportion of the losing side's stake
-        bool userWon = (bet.outcome && userStake >= bet.targetPrice) || (!bet.outcome && userStake < bet.targetPrice);
-        if (userWon) {
-            uint256 payout = userStake; // Simplified payout calculation; should be adjusted based on total stakes and odds
-            payable(msg.sender).transfer(payout);
-            bet.totalStake -= userStake;
-        }
-
-        bet.stakes[msg.sender] = 0;
+        bet.stakes[msg.sender] = 0; // Clear the user's stake after claiming
     }
 
-    // Additional utility functions can be added as needed
+    // Utility function to get the bet cutoff time
+function getBetCutoffTime(uint256 startTime, uint256 endTime) private pure returns (uint256) {
+    uint256 duration = endTime - startTime;
+    return startTime + (duration * 20 / 100); // 20% of the total duration
+}
+
 }
